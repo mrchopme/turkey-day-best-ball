@@ -47,7 +47,7 @@ function blankState() {
   return {
     v: 1, name: 'Turkey Day Best Ball',
     teams: ['', '', '', '', '', ''],
-    rounds: 6,
+    rounds: 7,
     slots: { QB: 1, RB: 1, WR: 2, TE: 1, WRTE: 0, FLEX: 1 },
     pin: null, picks: [], adj: {}, status: 'setup',
   };
@@ -59,14 +59,14 @@ function save() {
 
 /* Compact draft record, used by both the share link and the draft file. */
 function packDraft() {
-  return { n: S.name, t: S.teams, r: S.rounds, s: S.slots, p: S.picks, a: S.adj };
+  return { n: S.name, t: S.teams, r: S.rounds, s: S.slots, p: S.picks, a: S.adj, au: S.auto || [] };
 }
 function unpackDraft(d) {
   if (!d || !Array.isArray(d.t) || !d.t.length || !Number.isInteger(d.r) || !d.s || !Array.isArray(d.p)) throw new Error('not a draft record');
   const total = d.t.length * d.r;
   return {
     v: 1, name: String(d.n || 'Turkey Day Best Ball'), teams: d.t.map(String), rounds: d.r, slots: d.s, pin: null,
-    picks: d.p.map(String).slice(0, total), adj: d.a || {}, status: d.p.length >= total ? 'done' : d.p.length || d.started ? 'drafting' : 'setup',
+    picks: d.p.map(String).slice(0, total), adj: d.a || {}, auto: Array.isArray(d.au) ? d.au : [], status: d.p.length >= total ? 'done' : d.p.length || d.started ? 'drafting' : 'setup',
   };
 }
 
@@ -102,6 +102,8 @@ function migrateSlots(st) {
   if (st.status === 'setup' && s.QB === 1 && s.RB === 1 && s.WRTE === 2 && s.FLEX === 1 && !s.WR && !s.TE) {
     st.slots = { QB: 1, RB: 1, WR: 2, TE: 1, WRTE: 0, FLEX: 1 };
   }
+  if (st.status === 'setup' && !st.m7 && st.rounds === 6) st.rounds = 7;
+  st.m7 = 1;
   return st;
 }
 
@@ -300,6 +302,46 @@ function schedulePoll() {
   pollTimer = setTimeout(() => { if (!document.hidden) refreshLive(); else schedulePoll(); }, wait);
 }
 
+/* ---------- autodraft (runs on the host only) ---------- */
+
+const isAuto = (t) => !!(S.auto && S.auto[t]);
+let autoTimer = null;
+
+/* Best available by ADP at a position the team still needs to start; once the
+   starting lineup is full, the best remaining RB, WR or TE. */
+function autoChoice(t) {
+  const taken = new Set(S.picks), open = new Set();
+  bestLineup(rosterOf(t), (pid) => byId.get(pid)?.proj || 0).forEach((r) => {
+    if (r.starter && !r.pid) SLOTS.find((x) => x.label === r.slot).pos.forEach((pos) => open.add(pos));
+  });
+  const avail = pool.players.filter((p) => !taken.has(p.id) && !/^(out|ir|doubtful)/i.test(p.inj || ''));   // ADP order
+  const pick = avail.find((p) => open.has(p.pos)) || avail.find((p) => p.pos !== 'QB') || avail[0]
+    || pool.players.find((p) => !taken.has(p.id));
+  return pick ? pick.id : null;
+}
+
+function scheduleAuto() {
+  clearTimeout(autoTimer);
+  if (viewOnly || !S || S.status !== 'drafting' || ui.autoHold) return;
+  const i = S.picks.length, t = teamForPick(i);
+  if (!isAuto(t)) return;
+  autoTimer = setTimeout(() => {
+    if (S.status !== 'drafting' || S.picks.length !== i || !isAuto(teamForPick(i)) || ui.autoHold) return;
+    const pid = autoChoice(t);
+    if (pid) makePick(pid);
+  }, 3500);
+}
+
+function autoBar(t) {
+  if (viewOnly) return isAuto(t) ? '<div class="autobar"><span class="autotag">AUTO</span> Autodraft is picking for this team.</div>' : '';
+  if (isAuto(t)) {
+    return ui.autoHold
+      ? '<div class="autobar"><span class="autotag">AUTO</span> Autodraft is paused after the undo. <button class="ghost sm" data-act="autoresume">Resume</button></div>'
+      : '<div class="autobar"><span class="autotag">AUTO</span> Autodraft picks for this team in a few seconds…</div>';
+  }
+  return `<div class="autobar"><button class="ghost sm" data-act="autopick">Auto-pick for ${esc(teamName(t))}</button><span>takes the best available player by ADP that fits their lineup</span></div>`;
+}
+
 /* ---------- rendering ---------- */
 
 function toast(msg) {
@@ -339,7 +381,7 @@ function renderGames() {
   }).join('') + (live.error ? `<div class="game err">${esc(live.error)}</div>` : '');
 }
 
-function render() { renderChrome(); renderGames(); renderView(); }
+function render() { renderChrome(); renderGames(); renderView(); scheduleAuto(); }
 
 function renderView() {
   const v = $('#view');
@@ -381,6 +423,7 @@ function viewSetup() {
       <h2>Draft order <button class="ghost sm" data-act="shuffle">Randomize</button></h2>
       <ol class="order">
         ${S.teams.map((t, i) => `<li><span class="num">${i + 1}</span><input data-team="${i}" value="${esc(t)}" placeholder="Team ${i + 1}" maxlength="24">
+          <label class="check auto" title="Autodraft picks for this team"><input type="checkbox" data-auto="${i}" ${isAuto(i) ? 'checked' : ''}> Auto</label>
           <button class="ghost sm" data-move="${i}" data-d="-1" ${i === 0 ? 'disabled' : ''} aria-label="Move up">↑</button>
           <button class="ghost sm" data-move="${i}" data-d="1" ${i === nTeams() - 1 ? 'disabled' : ''} aria-label="Move down">↓</button></li>`).join('')}
       </ol>
@@ -403,6 +446,7 @@ function viewDraft() {
       <div class="clock">
         <div><span class="eyebrow">Round ${Math.floor(i / nTeams()) + 1} · Pick ${(i % nTeams()) + 1} <em>(${i + 1} of ${totalPicks()})</em></span>
           <strong>${esc(teamName(t))}</strong><span class="otc">is on the clock</span></div>
+        ${autoBar(t)}
         <div class="mine">${mine.length ? mine.map((p) => `<span class="chip ${p.pos}">${p.pos} ${esc(p.name.split(' ').slice(1).join(' ') || p.name)}</span>`).join('') : '<span class="muted">No picks yet</span>'}
           ${next ? `<span class="deck">On deck: ${esc(next)}</span>` : ''}</div>
       </div>
@@ -447,7 +491,7 @@ function renderPoolRows() {
 function boardHtml() {
   const n = nTeams(), cur = S.picks.length;
   let h = `<div class="boardwrap"><div class="board" style="--n:${n}">`;
-  h += S.teams.map((_, t) => `<div class="bh${S.status === 'drafting' && teamForPick(cur) === t ? ' on' : ''}">${esc(teamName(t))}</div>`).join('');
+  h += S.teams.map((_, t) => `<div class="bh${S.status === 'drafting' && teamForPick(cur) === t ? ' on' : ''}">${esc(teamName(t))}${isAuto(t) ? ' <span class="autotag">AUTO</span>' : ''}</div>`).join('');
   for (let r = 0; r < S.rounds; r++) {
     for (let c = 0; c < n; c++) {
       const i = r * n + (r % 2 === 0 ? c : n - 1 - c);
@@ -537,8 +581,8 @@ function viewCommish() {
       <h3>Starting lineup</h3>
       <div class="row">${SLOTS.map((s) => stepper(s.label, 'slot:' + s.key, S.slots[s.key] || 0, 0, 4)).join('')}</div>
       <p class="muted">Changing the lineup re-scores every team right away.</p>
-      <h3>Team names</h3>
-      <ol class="order">${S.teams.map((t, i) => `<li><span class="num">${i + 1}</span><input data-team="${i}" value="${esc(t)}" placeholder="Team ${i + 1}" maxlength="24"></li>`).join('')}</ol>
+      <h3>Team names and autodraft</h3>
+      <ol class="order">${S.teams.map((t, i) => `<li><span class="num">${i + 1}</span><input data-team="${i}" value="${esc(t)}" placeholder="Team ${i + 1}" maxlength="24"><label class="check auto" title="Autodraft picks for this team"><input type="checkbox" data-auto="${i}" ${isAuto(i) ? 'checked' : ''}> Auto</label></li>`).join('')}</ol>
     </div>
     <div class="panel">
       <h2>Score adjustments</h2>
@@ -565,6 +609,7 @@ function makePick(pid) {
   if (viewOnly || S.status !== 'drafting' || S.picks.includes(pid) || !byId.has(pid)) return;
   S.picks.push(pid);
   ui.pending = null;
+  ui.autoHold = false;
   if (S.picks.length >= totalPicks()) { S.status = 'done'; tab = 'scores'; toast('Draft complete. Copy the share link for everyone.'); }
   save(); render();
 }
@@ -582,6 +627,7 @@ document.addEventListener('click', async (e) => {
     const n = +d.count;
     while (S.teams.length < n) S.teams.push('');
     S.teams.length = n;
+    S.auto = S.teams.map((_, k) => isAuto(k));
     save(); render(); return;
   }
   if (d.step) {
@@ -591,18 +637,23 @@ document.addEventListener('click', async (e) => {
     save(); render(); return;
   }
   if (d.move) {
-    const i = +d.move, j = i + +d.d;
+    const i = +d.move, j = i + +d.d, au = S.teams.map((_, k) => isAuto(k));
     [S.teams[i], S.teams[j]] = [S.teams[j], S.teams[i]];
+    [au[i], au[j]] = [au[j], au[i]];
+    S.auto = au;
     save(); renderView(); return;
   }
   if (d.adjclear) { delete S.adj[d.adjclear]; save(); renderView(); return; }
   switch (d.act) {
     case 'shuffle': {
       S.teams = S.teams.map((t, i) => t || `Team ${i + 1}`);
+      const au = S.teams.map((_, k) => isAuto(k));
       for (let i = S.teams.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
         [S.teams[i], S.teams[j]] = [S.teams[j], S.teams[i]];
+        [au[i], au[j]] = [au[j], au[i]];
       }
+      S.auto = au;
       save(); renderView(); toast('Draft order randomized'); break;
     }
     case 'start': {
@@ -615,7 +666,7 @@ document.addEventListener('click', async (e) => {
     }
     case 'undo':
       if (!isAdmin() || !S.picks.length) break;
-      S.picks.pop(); S.status = 'drafting';
+      S.picks.pop(); S.status = 'drafting'; ui.autoHold = true;
       save(); render(); toast('Last pick undone'); break;
     case 'reset':
       if (!isAdmin() || !window.confirm('Reset the draft? All picks are cleared and you go back to setup.')) break;
@@ -623,6 +674,13 @@ document.addEventListener('click', async (e) => {
       save(); render(); break;
     case 'lock': ui.unlocked = false; renderView(); break;
     case 'share': copyShare(); break;
+    case 'autopick': {
+      if (viewOnly || S.status !== 'drafting') break;
+      const pid = autoChoice(teamForPick(S.picks.length));
+      if (pid) makePick(pid);
+      break;
+    }
+    case 'autoresume': ui.autoHold = false; render(); break;
     case 'download': downloadDraft(); break;
     case 'restore': if (isAdmin()) $('#restoreFile').click(); break;
     case 'refresh': await refreshLive(); toast('Scores refreshed'); break;
@@ -635,6 +693,11 @@ document.addEventListener('input', (e) => {
   if (el.id === 'q') { ui.q = el.value; renderPoolRows(); }
   else if (el.id === 'hideDrafted') { ui.hideDrafted = el.checked; renderPoolRows(); }
   else if (el.dataset.f === 'name') { S.name = el.value; save(); $('#leagueName').textContent = S.name || 'Turkey Day Best Ball'; }
+  else if (el.dataset.auto !== undefined && isAdmin()) {
+    const au = S.teams.map((_, k) => isAuto(k));
+    au[+el.dataset.auto] = el.checked;
+    S.auto = au; save(); render();
+  }
   else if (el.dataset.team !== undefined && isAdmin()) { S.teams[+el.dataset.team] = el.value; save(); }
 });
 

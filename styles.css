@@ -227,3 +227,9 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accen
   .deck { margin-left: 0; width: 100%; }
 }
 @media (prefers-reduced-motion: reduce) { .dot { animation: none; } #toast { transition: none; } }
+
+/* autodraft */
+.autobar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; color: var(--muted); }
+.autotag { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .06em; padding: 1px 6px; border-radius: 5px; background: rgba(255, 255, 255, .14); color: var(--text); vertical-align: 1px; }
+.bh.on .autotag { background: rgba(0, 0, 0, .22); color: var(--accent-ink); }
+.check.auto { font-size: 12.5px; }
