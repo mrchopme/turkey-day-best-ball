@@ -233,3 +233,4 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--accen
 .autotag { display: inline-block; font-size: 10px; font-weight: 800; letter-spacing: .06em; padding: 1px 6px; border-radius: 5px; background: rgba(255, 255, 255, .14); color: var(--text); vertical-align: 1px; }
 .bh.on .autotag { background: rgba(0, 0, 0, .22); color: var(--accent-ink); }
 .check.auto { font-size: 12.5px; }
+.ver { text-align: center; color: var(--muted); font-size: 11px; opacity: .6; padding: 0 0 24px; }
