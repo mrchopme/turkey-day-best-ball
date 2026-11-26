@@ -113,3 +113,27 @@
   .oubtns { grid-column: 1 / -1; }
   .oub { flex: 1; padding: 12px; }
 }
+
+/* my team + scoring breakdown */
+#tabs { overflow-x: auto; max-width: 100%; scrollbar-width: none; }
+.tab { white-space: nowrap; }
+.tap { cursor: pointer; }
+.tap:hover { background: var(--panel2); }
+.chev { color: var(--muted); font-size: 11px; margin-left: 2px; }
+.card li.bdli { display: block; padding: 2px 16px 14px; background: rgba(0, 0, 0, .16); }
+.bd { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px 13px; font-size: 13.5px; }
+.bd > div { display: flex; justify-content: space-between; gap: 12px; padding: 3px 0; color: var(--muted); font-variant-numeric: tabular-nums; }
+.bd > div span:last-child { color: var(--text); }
+.bd .tt { color: var(--text); font-weight: 700; border-top: 1px solid var(--line); margin-top: 6px; padding-top: 8px; }
+.bdh { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 5px; }
+.mewrap { max-width: 660px; margin: 0 auto; display: grid; gap: 14px; }
+.mehero {
+  display: flex; justify-content: space-between; align-items: center; gap: 14px;
+  background: linear-gradient(120deg, rgba(255, 138, 61, .20), rgba(255, 138, 61, .04) 70%), var(--panel);
+  border: 1px solid rgba(255, 138, 61, .45); border-radius: var(--r); padding: 16px 18px;
+}
+.mehero h2 { font-size: 26px; letter-spacing: -.02em; line-height: 1.15; }
+.mehero .muted { font-size: 13px; margin-top: 2px; }
+.mehero .tot strong { font-size: 42px; }
+#meAs { width: auto; padding: 6px 10px; margin-left: 6px; }
+@media (max-width: 640px) { .tab { flex: 0 0 auto; padding: 7px 12px; } }

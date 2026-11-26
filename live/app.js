@@ -33,7 +33,7 @@ let S = null;               // draft state
 let viewOnly = false;       // opened from a share link or a locked draft
 let locked = false;         // data/draft.json in the repo holds the final draft
 let tab = 'setup';
-const ui = { filter: 'ALL', q: '', hideDrafted: true, pending: null, unlocked: false, ouDraft: {}, ouAs: 0, ouSent: null };
+const ui = { filter: 'ALL', q: '', hideDrafted: true, pending: null, unlocked: false, ouDraft: {}, ouAs: 0, ouSent: null, open: new Set() };
 const live = { games: {}, stats: new Map(), twoPt: new Map(), updated: null, error: null, finalLoaded: new Set() };
 let pollTimer = null;
 let guest = false;          // joined from a phone through the join link
@@ -344,7 +344,7 @@ async function refreshLive() {
     console.warn(e);
   }
   renderGames();
-  if (tab === 'scores' || tab === 'ou') renderView();
+  if (tab === 'scores' || tab === 'ou' || tab === 'me') renderView();
   schedulePoll();
 }
 
@@ -522,7 +522,7 @@ function viewWho() {
 const gameOf = (ln) => (ln[0] === 'g' ? ln[1] : ln[0] === 'p' ? byId.get(ln[1])?.gameId : null);
 const kickoff = (gid) => +new Date(pool.games.find((g) => g.id === gid)?.date || 0);
 const lockTime = (ln) => (gameOf(ln) ? kickoff(gameOf(ln)) : S.ou.lock);
-const ouWho = () => (guest ? me : ui.ouAs);
+const ouWho = () => (guest ? me : Math.min(ui.ouAs, nTeams() - 1));
 
 function ouState(ln) {
   const gid = gameOf(ln);
@@ -713,6 +713,73 @@ function autoBar(t) {
   return `<div class="autobar"><button class="ghost sm" data-act="autopick">Auto-pick for ${esc(teamName(t))}</button><span>takes the best available player by ADP that fits their lineup</span></div>`;
 }
 
+/* ---------- my team + scoring breakdown ---------- */
+
+/* Each stat with the points it earned, as [label, points] rows. */
+function breakdown(pid) {
+  const st = live.stats.get(pid) || {}, g = (k) => st[k] || 0, rows = [];
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+  const count = (n, label, each) => { if (n) rows.push([label, n * each]); };
+  if (g('passing.passingAttempts')) rows.push([`${g('passing.completions')}/${g('passing.passingAttempts')} passing, ${g('passing.passingYards')} yd`, g('passing.passingYards') * SCORING.passYd]);
+  count(g('passing.passingTouchdowns'), plural(g('passing.passingTouchdowns'), 'passing TD', 'passing TDs'), SCORING.passTd);
+  count(g('passing.interceptions'), plural(g('passing.interceptions'), 'interception', 'interceptions'), SCORING.int);
+  if (g('rushing.rushingAttempts')) rows.push([`${plural(g('rushing.rushingAttempts'), 'carry', 'carries')}, ${g('rushing.rushingYards')} rushing yd`, g('rushing.rushingYards') * SCORING.rushYd]);
+  count(g('rushing.rushingTouchdowns'), plural(g('rushing.rushingTouchdowns'), 'rushing TD', 'rushing TDs'), SCORING.rushTd);
+  count(g('receiving.receptions'), plural(g('receiving.receptions'), 'reception', 'receptions'), SCORING.rec);
+  if (g('receiving.receptions') || g('receiving.receivingYards')) rows.push([`${g('receiving.receivingYards')} receiving yd`, g('receiving.receivingYards') * SCORING.recYd]);
+  count(g('receiving.receivingTouchdowns'), plural(g('receiving.receivingTouchdowns'), 'receiving TD', 'receiving TDs'), SCORING.recTd);
+  const ret = g('kickReturns.kickReturnTouchdowns') + g('puntReturns.puntReturnTouchdowns');
+  count(ret, plural(ret, 'return TD', 'return TDs'), SCORING.retTd);
+  const two = live.twoPt.get(pid) || 0;
+  count(two, plural(two, 'two-point conversion', 'two-point conversions'), SCORING.twoPt);
+  count(g('fumbles.fumblesLost'), plural(g('fumbles.fumblesLost'), 'fumble lost', 'fumbles lost'), SCORING.fumLost);
+  const adj = Number(S.adj?.[pid]) || 0;
+  if (adj) rows.push(['Commissioner adjustment', adj]);
+  return rows;
+}
+
+function breakdownHtml(pid) {
+  const p = byId.get(pid), gs = gameState(pid), rows = breakdown(pid);
+  const num = (v) => fmt(v).replace('-', '−');
+  const kick = new Date(kickoff(p.gameId)).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const head = gs === 'pre' ? `Kicks off ${kick} · projected ${fmt(p.proj)}` : `${gs === 'post' ? 'Final' : 'Live now'} · projected ${fmt(p.proj)}`;
+  const body = rows.length
+    ? rows.map(([label, v]) => `<div><span>${esc(label)}</span><span>${num(v)}</span></div>`).join('')
+    : `<div><span>${gs === 'pre' ? 'No stats until kickoff' : 'No stats yet'}</span><span>0.0</span></div>`;
+  return `<div class="bd"><p class="bdh">${head}</p>${body}<div class="tt"><span>Total</span><span>${num(pts(pid))}</span></div></div>`;
+}
+
+function viewMe() {
+  const t = ouWho();
+  if (t === null || t < 0) {
+    return '<div class="panel narrow"><h2>My team</h2><p class="muted">You are watching. Pick your name to see your team here.</p><div class="btnrow"><button class="primary" data-act="whoami">Pick my name</button></div></div>';
+  }
+  const totals = S.teams.map((_, k) => ({ k, total: teamTotal(k) })).sort((a, b) => b.total - a.total);
+  const rank = totals.findIndex((x) => x.k === t), mine = totals[rank].total, other = totals[rank === 0 ? 1 : 0];
+  const gap = !other ? '' : rank === 0 ? `${fmt(mine - other.total)} ahead of ${esc(teamName(other.k))}` : `${fmt(other.total - mine)} behind ${esc(teamName(other.k))}`;
+  const ids = rosterOf(t);
+  const liveN = ids.filter((pid) => gameState(pid) === 'in').length, preN = ids.filter((pid) => gameState(pid) === 'pre').length;
+  const proj = teamTotal(t, (pid) => byId.get(pid)?.proj || 0);
+  const n = rank + 1, ord = n + (n % 100 > 10 && n % 100 < 14 ? 'th' : ['th', 'st', 'nd', 'rd'][n % 10] || 'th');
+  const rows = bestLineup(ids, pts).map((r) => {
+    const p = r.pid && byId.get(r.pid);
+    if (!p) return `<li class="${r.starter ? '' : 'bn'} hole"><span class="slot">${r.slot}</span><span class="who muted">Empty</span><span class="pp">0.0</span></li>`;
+    const st = live.stats.get(p.id), gs = gameState(p.id), open = ui.open.has(p.id);
+    const line = gs === 'pre' ? `${p.home ? 'vs' : '@'} ${p.opp} · proj ${fmt(p.proj)}` : esc((st && statLine(st, live.twoPt.get(p.id))) || 'No stats yet');
+    return `<li class="${r.starter ? '' : 'bn'} ${gs} tap" data-open="${p.id}" role="button" tabindex="0" aria-expanded="${open}"><span class="slot">${r.slot}</span>
+      <span class="who avrow">${av(p, 'sm')}<span class="wt"><span class="l1"><b>${esc(p.name)}</b> <span class="chip ${p.pos}">${p.pos}</span> <small>${p.team}</small></span><small class="line">${line}</small></span></span>
+      <span class="pp">${gs === 'in' ? '<span class="dot"></span>' : ''}${fmt(pts(p.id))}<span class="chev">${open ? '▴' : '▾'}</span></span></li>${open ? `<li class="bdli">${breakdownHtml(p.id)}</li>` : ''}`;
+  }).join('');
+  return `<div class="mewrap">
+    ${guest ? '' : `<label class="check">Viewing <select id="meAs">${S.teams.map((_, k) => `<option value="${k}" ${k === t ? 'selected' : ''}>${esc(teamName(k))}</option>`).join('')}</select></label>`}
+    <div class="mehero"><div><span class="eyebrow">${ord} of ${nTeams()}</span><h2>${esc(teamName(t))}</h2>
+      <p class="muted">${[gap, liveN ? `<span class="livetag">${liveN} live</span>` : '', preN ? `${preN} yet to play` : ''].filter(Boolean).join(' · ')}</p></div>
+      <div class="tot"><strong>${fmt(mine)}</strong><small>proj ${fmt(proj)}</small></div></div>
+    <article class="card">${rows ? `<ul>${rows}</ul>` : '<p class="muted pad">No players drafted yet.</p>'}</article>
+    <p class="muted center">Tap a player to see how their points add up.${guest ? ' <button class="link" data-act="whoami">Not you? Change name</button>' : ''}</p>
+  </div>`;
+}
+
 /* ---------- rendering ---------- */
 
 function toast(msg) {
@@ -740,12 +807,12 @@ function renderChrome() {
   if (S.status === 'setup' && !viewOnly) tabs.push(['setup', 'Setup']);
   else {
     if ((!viewOnly || guest) && S.status === 'drafting') tabs.push(['draft', 'Draft']);
-    tabs.push(['board', 'Board'], ['scores', 'Scores']);
+    tabs.push(['me', 'My team'], ['board', 'Board'], ['scores', 'Scores']);
     if (S.ou) tabs.push(['ou', 'O/U']);
     if (!viewOnly) tabs.push(['commish', 'Commish']);
   }
   if (!tabs.some(([k]) => k === tab)) tab = tabs[0][0];
-  $('#tabs').innerHTML = tabs.map(([k, label]) => `<button class="tab${k === tab ? ' on' : ''}" data-tab="${k}">${label}</button>`).join('') + (guest ? '<button class="tab" data-act="whoami" title="Change who you are">Me</button>' : '');
+  $('#tabs').innerHTML = tabs.map(([k, label]) => `<button class="tab${k === tab ? ' on' : ''}" data-tab="${k}">${label}</button>`).join('');
 }
 
 function renderGames() {
@@ -775,6 +842,7 @@ function renderView() {
   else if (tab === 'scores') v.innerHTML = viewScores();
   else if (tab === 'commish') v.innerHTML = viewCommish();
   else if (tab === 'ou') v.innerHTML = viewOu();
+  else if (tab === 'me') v.innerHTML = viewMe();
 }
 
 /* --- setup --- */
@@ -927,10 +995,10 @@ function viewScores() {
           if (!p) return `<li class="${r.starter ? '' : 'bn'} hole"><span class="slot">${r.slot}</span><span class="who muted">Empty</span><span class="pp">0.0</span></li>`;
           const st = live.stats.get(p.id), gs = gameState(p.id), adj = Number(S.adj?.[p.id]) || 0;
           const line = st ? statLine(st, live.twoPt.get(p.id)) : '';
-          return `<li class="${r.starter ? '' : 'bn'} ${gs}"><span class="slot">${r.slot}</span>
+          return `<li class="${r.starter ? '' : 'bn'} ${gs} tap" data-open="${p.id}" role="button" tabindex="0"><span class="slot">${r.slot}</span>
             <span class="who avrow">${av(p, 'sm')}<span class="wt"><span class="l1"><b>${esc(p.name)}</b> <span class="chip ${p.pos}">${p.pos}</span> <small>${p.team}</small></span>
               <small class="line">${gs === 'pre' ? `${p.home ? 'vs' : '@'} ${p.opp} · proj ${fmt(p.proj)}` : esc(line || 'No stats yet')}${adj ? ` · adj ${adj > 0 ? '+' : ''}${adj}` : ''}</small></span></span>
-            <span class="pp">${gs === 'in' ? '<span class="dot"></span>' : ''}${fmt(pts(p.id))}</span></li>`;
+            <span class="pp">${gs === 'in' ? '<span class="dot"></span>' : ''}${fmt(pts(p.id))}</span></li>${ui.open.has(p.id) ? `<li class="bdli">${breakdownHtml(p.id)}</li>` : ''}`;
         }).join('')}
       </ul>
     </article>`).join('')}
@@ -1015,10 +1083,11 @@ function makePick(pid) {
 }
 
 document.addEventListener('click', async (e) => {
-  const b = e.target.closest('button');
+  const b = e.target.closest('button, [data-open]');
   if (!b) return;
   const d = b.dataset;
   if (d.tab) { tab = d.tab; ui.pending = null; render(); return; }
+  if (d.open) { if (ui.open.has(d.open)) ui.open.delete(d.open); else ui.open.add(d.open); renderView(); return; }
   if (d.filter) { ui.filter = d.filter; renderView(); return; }
   if (d.pick) { ui.pending = d.pick; renderPoolRows(); return; }
   if (d.cancel) { ui.pending = null; renderPoolRows(); return; }
@@ -1048,7 +1117,7 @@ document.addEventListener('click', async (e) => {
   if (d.iam !== undefined) {
     me = +d.iam;
     localStorage.setItem(`tdbb.live.me.${room}`, String(me));
-    tab = S.status === 'drafting' ? 'draft' : 'scores';
+    tab = S.status === 'drafting' ? 'draft' : me >= 0 ? 'me' : 'scores';
     render(); return;
   }
   switch (d.act) {
@@ -1136,10 +1205,14 @@ document.addEventListener('submit', async (e) => {
 });
 
 document.addEventListener('change', (e) => {
-  if (e.target.id === 'ouAs') { ui.ouAs = +e.target.value; ui.ouDraft = {}; renderView(); return; }
+  if (e.target.id === 'ouAs' || e.target.id === 'meAs') { ui.ouAs = +e.target.value; localStorage.setItem('tdbb.live.hostAs', String(ui.ouAs)); ui.ouDraft = {}; renderView(); return; }
   if (e.target.id !== 'restoreFile' || !e.target.files[0]) return;
   restoreDraft(e.target.files[0]);
   e.target.value = '';
+});
+
+document.addEventListener('keydown', (e) => {
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches && e.target.matches('[data-open]')) { e.preventDefault(); e.target.click(); }
 });
 
 document.addEventListener('visibilitychange', () => {
@@ -1176,6 +1249,7 @@ document.addEventListener('visibilitychange', () => {
     S.adj = S.adj || {};
     room = S.room;
     ui.unlocked = !S.pin;
+    ui.ouAs = +(localStorage.getItem('tdbb.live.hostAs') || 0) || 0;
     tab = S.status === 'setup' ? 'setup' : S.status === 'done' ? 'scores' : 'draft';
     render();
     connectHost();
