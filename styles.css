@@ -85,6 +85,10 @@ main { padding: 4px 20px 60px; max-width: 1500px; margin: 0 auto; }
 .danger { background: transparent; border-color: rgba(255, 90, 95, .5); color: var(--live); }
 .draftbtn { background: transparent; border-color: var(--accent); color: var(--accent); }
 .draftbtn:hover { background: var(--accent); color: var(--accent-ink); }
+.link { background: none; border: 0; padding: 0; color: var(--muted); text-decoration: underline; text-underline-offset: 3px; font-size: 13px; }
+.link:hover { color: var(--text); }
+.center { text-align: center; margin-top: 12px; }
+code { background: var(--bg); border: 1px solid var(--line); border-radius: 5px; padding: 0 5px; font-size: 12.5px; }
 .sm { padding: 5px 11px; font-size: 13px; border-radius: 8px; }
 .big { width: 100%; padding: 14px; font-size: 16px; margin-top: 16px; }
 input:not([type=checkbox]), select {

@@ -12,6 +12,17 @@ then send everyone the share link to follow the live leaderboard.
 - **Commissioner PIN** locks undo, reset and score adjustments on the host device. It is a
   courtesy lock, not security: everything runs client-side.
 
+## Saving and locking a draft
+
+Every pick is saved in the host's browser, so a refresh keeps the draft. For a durable copy,
+open **Commish → Download draft file**. That `draft.json` can be loaded back with
+**Restore from file** on any device.
+
+To lock the final rosters for everyone, commit that file to the repo as `data/draft.json`.
+The plain site link then shows those rosters, view only, with live scores. While a draft is
+locked, add `?host` to the URL to reach the host's own draft and the Commish tab. To unlock,
+set `data/draft.json` back to `null`.
+
 ## Scoring (full PPR)
 
 Passing 1 pt / 25 yd, 4 per TD, −1 per INT. Rushing and receiving 1 pt / 10 yd, 6 per TD,

@@ -27,7 +27,8 @@ let pool = null;            // data/players.json
 const byId = new Map();     // player id -> player
 const byName = new Map();   // normalized name -> player
 let S = null;               // draft state
-let viewOnly = false;       // opened from a share link
+let viewOnly = false;       // opened from a share link or a locked draft
+let locked = false;         // data/draft.json in the repo holds the final draft
 let tab = 'setup';
 const ui = { filter: 'ALL', q: '', hideDrafted: true, pending: null, unlocked: false };
 const live = { games: {}, stats: new Map(), twoPt: new Map(), updated: null, error: null, finalLoaded: new Set() };
@@ -54,15 +55,36 @@ function save() {
   if (!viewOnly) localStorage.setItem(LS_KEY, JSON.stringify(S));
 }
 
-function loadState() {
+/* Compact draft record, used by both the share link and the draft file. */
+function packDraft() {
+  return { n: S.name, t: S.teams, r: S.rounds, s: S.slots, p: S.picks, a: S.adj };
+}
+function unpackDraft(d) {
+  if (!d || !Array.isArray(d.t) || !d.t.length || !Number.isInteger(d.r) || !d.s || !Array.isArray(d.p)) throw new Error('not a draft record');
+  const total = d.t.length * d.r;
+  return {
+    v: 1, name: String(d.n || 'Turkey Day Best Ball'), teams: d.t.map(String), rounds: d.r, slots: d.s, pin: null,
+    picks: d.p.map(String).slice(0, total), adj: d.a || {}, status: d.p.length >= total ? 'done' : d.p.length || d.started ? 'drafting' : 'setup',
+  };
+}
+
+function loadState(lockedFile) {
   const m = location.hash.match(/[#&]d=([A-Za-z0-9_-]+)/);
   if (m) {
     try {
-      const d = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(m[1].replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0))));
+      const s = unpackDraft(JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(m[1].replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0)))));
+      if (s.status === 'setup') s.status = 'drafting';
       viewOnly = true;
-      const total = d.t.length * d.r;
-      return { v: 1, name: d.n, teams: d.t, rounds: d.r, slots: d.s, pin: null, picks: d.p || [], adj: d.a || {}, status: (d.p || []).length >= total ? 'done' : 'drafting' };
+      return s;
     } catch (e) { console.warn('bad share link', e); }
+  }
+  if (lockedFile) {
+    try {
+      const s = unpackDraft(lockedFile);
+      if (s.status === 'setup') s.status = 'drafting';
+      viewOnly = true; locked = true;
+      return s;
+    } catch (e) { console.warn('bad data/draft.json', e); }
   }
   try {
     const s = JSON.parse(localStorage.getItem(LS_KEY));
@@ -71,9 +93,36 @@ function loadState() {
   return blankState();
 }
 
+function downloadDraft() {
+  const rosters = {};
+  S.teams.forEach((_, t) => { rosters[teamName(t)] = rosterOf(t).map((pid) => { const p = byId.get(pid); return p ? `${p.name} (${p.pos}, ${p.team})` : pid; }); });
+  const file = { app: 'turkey-day-best-ball', saved: new Date().toISOString(), ...packDraft(), started: S.status !== 'setup', rosters };
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(file, null, 1)], { type: 'application/json' }));
+  a.download = 'draft.json';
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  toast('Draft file downloaded');
+}
+
+async function restoreDraft(file) {
+  try {
+    const s = unpackDraft(JSON.parse(await file.text()));
+    const unknown = s.picks.filter((pid) => !byId.has(pid));
+    if (unknown.length) throw new Error('unknown players');
+    if (S.picks.length && !window.confirm(`Replace the current draft (${S.picks.length} picks) with the one in this file (${s.picks.length} picks)?`)) return;
+    s.pin = S.pin;
+    S = s;
+    tab = S.status === 'setup' ? 'setup' : S.status === 'done' ? 'scores' : 'draft';
+    save(); render(); toast('Draft restored from file');
+  } catch (e) {
+    console.warn(e);
+    toast('That file is not a draft file for this slate');
+  }
+}
+
 function shareUrl() {
-  const d = { n: S.name, t: S.teams, r: S.rounds, s: S.slots, p: S.picks, a: S.adj };
-  const bytes = new TextEncoder().encode(JSON.stringify(d));
+  const bytes = new TextEncoder().encode(JSON.stringify(packDraft()));
   let bin = '';
   bytes.forEach((b) => { bin += String.fromCharCode(b); });
   return location.origin + location.pathname + '#d=' + btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -254,7 +303,7 @@ function renderChrome() {
   const fmtSlots = SLOTS.filter((s) => S.slots[s.key]).map((s) => `${S.slots[s.key] > 1 ? S.slots[s.key] + ' ' : ''}${s.label}`).join(' · ');
   $('#subline').textContent = S.status === 'setup' && !viewOnly
     ? 'Thanksgiving slate · full PPR'
-    : `${nTeams()} drafters · ${S.rounds} rounds · ${fmtSlots} · full PPR${viewOnly ? ' · view only' : ''}`;
+    : `${nTeams()} drafters · ${S.rounds} rounds · ${fmtSlots} · full PPR${locked ? ' · rosters locked' : viewOnly ? ' · view only' : ''}`;
   const tabs = [];
   if (S.status === 'setup' && !viewOnly) tabs.push(['setup', 'Setup']);
   else {
@@ -325,6 +374,7 @@ function viewSetup() {
       </ol>
       <p class="muted">Snake draft: the order reverses every round.</p>
       <button class="primary big" data-act="start">Start the draft</button>
+      <p class="muted center"><button class="link" data-act="restore">Restore a draft from a saved file</button></p>
     </div>
   </div>`;
 }
@@ -466,6 +516,12 @@ function viewCommish() {
         <button class="danger" data-act="reset">Reset draft</button>
       </div>
       <p class="muted">The share link is a snapshot of the rosters. Copy it again after any change and re-send it. Everyone's scores update live on their own.</p>
+      <h3>Save to a file</h3>
+      <div class="btnrow">
+        <button class="primary" data-act="download">Download draft file</button>
+        <button class="ghost" data-act="restore">Restore from file</button>
+      </div>
+      <p class="muted">The draft is saved in this browser after every pick, so a refresh keeps it. The file is a backup that survives a cleared browser or a different device. To lock the final rosters for everyone, put the file in the repo as <code>data/draft.json</code>: the plain link then shows them, view only.</p>
       <h3>Team names</h3>
       <ol class="order">${S.teams.map((t, i) => `<li><span class="num">${i + 1}</span><input data-team="${i}" value="${esc(t)}" placeholder="Team ${i + 1}" maxlength="24"></li>`).join('')}</ol>
     </div>
@@ -552,6 +608,8 @@ document.addEventListener('click', async (e) => {
       save(); render(); break;
     case 'lock': ui.unlocked = false; renderView(); break;
     case 'share': copyShare(); break;
+    case 'download': downloadDraft(); break;
+    case 'restore': if (isAdmin()) $('#restoreFile').click(); break;
     case 'refresh': await refreshLive(); toast('Scores refreshed'); break;
     default:
   }
@@ -579,6 +637,12 @@ document.addEventListener('submit', async (e) => {
   }
 });
 
+document.addEventListener('change', (e) => {
+  if (e.target.id !== 'restoreFile' || !e.target.files[0]) return;
+  restoreDraft(e.target.files[0]);
+  e.target.value = '';
+});
+
 document.addEventListener('visibilitychange', () => { if (!document.hidden && pool) refreshLive(); });
 
 /* ---------- boot ---------- */
@@ -591,7 +655,16 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden && po
     return;
   }
   pool.players.forEach((p) => { byId.set(p.id, p); byName.set(norm(p.name), p); });
-  S = loadState();
+  // A draft file committed to the repo locks the final rosters for every visitor.
+  // Add ?host to the URL to skip it and use this browser's own draft instead.
+  let lockedFile = null;
+  if (!new URLSearchParams(location.search).has('host')) {
+    try {
+      const r = await fetch('data/draft.json', { cache: 'no-store' });
+      if (r.ok) lockedFile = await r.json();
+    } catch (e) { /* no locked draft */ }
+  }
+  S = loadState(lockedFile);
   S.adj = S.adj || {};
   ui.unlocked = !S.pin;
   tab = S.status === 'setup' ? 'setup' : S.status === 'done' || viewOnly ? 'scores' : 'draft';
