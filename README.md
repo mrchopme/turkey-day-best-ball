@@ -12,6 +12,18 @@ then send everyone the share link to follow the live leaderboard.
 - **Commissioner PIN** locks undo, reset and score adjustments on the host device. It is a
   courtesy lock, not security: everything runs client-side.
 
+## Phone drafting (`/live/`)
+
+`live/` is a separate copy of the app where everyone drafts from their own phone. The host
+sets up and starts the draft there, then sends the join link. Each guest taps their name and
+gets a Draft button on their turn; the host screen can still pick for anyone.
+
+The host's browser is the source of truth. It publishes a snapshot after every change and
+validates pick requests from guests, through [ntfy.sh](https://ntfy.sh), a free public
+pub/sub relay (no account). The random room code in the join link is the only key, and team
+names and picks pass through that relay. Keep the host tab open during the draft. The main
+site at `/` does not use the relay at all.
+
 ## Saving and locking a draft
 
 Every pick is saved in the host's browser, so a refresh keeps the draft. For a durable copy,
