@@ -39,7 +39,7 @@ set `data/draft.json` back to `null`.
 
 Passing 1 pt / 25 yd, 4 per TD, −1 per INT. Rushing and receiving 1 pt / 10 yd, 6 per TD,
 1 per reception. Return TD 6, two-point conversion 2, fumble lost −2. Default lineup:
-QB, RB, 2 WR/TE, FLEX, with the rest on the bench.
+QB, RB, 2 WR, TE, FLEX (a combined WR/TE slot is also available), with the rest on the bench.
 
 ## Rebuild the player pool
 

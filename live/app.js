@@ -20,6 +20,8 @@ const SCORING = {
 const SLOTS = [
   { key: 'QB', label: 'QB', pos: ['QB'] },
   { key: 'RB', label: 'RB', pos: ['RB'] },
+  { key: 'WR', label: 'WR', pos: ['WR'] },
+  { key: 'TE', label: 'TE', pos: ['TE'] },
   { key: 'WRTE', label: 'WR/TE', pos: ['WR', 'TE'] },
   { key: 'FLEX', label: 'FLEX', pos: ['RB', 'WR', 'TE'] },
 ];
@@ -113,7 +115,7 @@ function blankState() {
     v: 1, name: 'Turkey Day Best Ball',
     teams: ['', '', '', '', '', ''],
     rounds: 6,
-    slots: { QB: 1, RB: 1, WRTE: 2, FLEX: 1 },
+    slots: { QB: 1, RB: 1, WR: 2, TE: 1, WRTE: 0, FLEX: 1 },
     pin: null, picks: [], adj: {}, status: 'setup', room: newRoom(),
   };
 }
@@ -143,6 +145,16 @@ function loadState() {
     if (s && s.v === 1) { s.room = s.room || newRoom(); return s; }
   } catch (e) { /* fall through */ }
   return blankState();
+}
+
+/* The default lineup changed from QB/RB/2 WR-TE/FLEX to QB/RB/2 WR/TE/FLEX.
+   A draft that has not started yet and still holds the old default moves over. */
+function migrateSlots(st) {
+  const s = st.slots || {};
+  if (st.status === 'setup' && s.QB === 1 && s.RB === 1 && s.WRTE === 2 && s.FLEX === 1 && !s.WR && !s.TE) {
+    st.slots = { QB: 1, RB: 1, WR: 2, TE: 1, WRTE: 0, FLEX: 1 };
+  }
+  return st;
 }
 
 function downloadDraft() {
@@ -920,6 +932,9 @@ function viewCommish() {
         <button class="ghost" data-act="restore">Restore from file</button>
       </div>
       <p class="muted">The draft is saved in this browser after every pick, so a refresh keeps it. The file is a backup that survives a cleared browser or a different device. To lock the final rosters for everyone, put the file in the repo as <code>data/draft.json</code>: the main site link then shows them, view only.</p>
+      <h3>Starting lineup</h3>
+      <div class="row">${SLOTS.map((s) => stepper(s.label, 'slot:' + s.key, S.slots[s.key] || 0, 0, 4)).join('')}</div>
+      <p class="muted">Changing the lineup re-scores every team right away.</p>
       <h3>Team names</h3>
       <ol class="order">${S.teams.map((t, i) => `<li><span class="num">${i + 1}</span><input data-team="${i}" value="${esc(t)}" placeholder="Team ${i + 1}" maxlength="24"></li>`).join('')}</ol>
     </div>
@@ -1094,6 +1109,7 @@ document.addEventListener('visibilitychange', () => {
     connectGuest();
   } else {
     S = loadState();
+    migrateSlots(S);
     S.adj = S.adj || {};
     room = S.room;
     ui.unlocked = !S.pin;
