@@ -979,6 +979,7 @@ function viewScores() {
   <div class="scorebar">
     <span class="muted">${upd} · refreshes automatically during games</span>
     <span class="grow"></span>
+    <a class="ghost sm recaplink" href="../recap/" target="_blank" rel="noopener">Watch the draft recap</a>
     <button class="ghost sm" data-act="refresh">Refresh</button>
     ${anyPicks ? '<button class="primary sm" data-act="share">Copy share link</button>' : ''}
   </div>

@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>The Draft, Reviewed · Turkey Day Best Ball</title>
+<meta name="description" content="A completely impartial review of the Turkey Day Best Ball draft.">
+<meta name="theme-color" content="#0d0f13">
+<meta property="og:title" content="Turkey Day Best Ball: The Draft, Reviewed">
+<meta property="og:type" content="video.other">
+<meta property="og:image" content="poster.jpg">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A6%83%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="../styles.css?v=1246">
+<style>
+  .recap { max-width: 1100px; margin: 0 auto; padding: 18px 20px 60px; display: grid; gap: 16px; }
+  .recap video { width: 100%; aspect-ratio: 16 / 9; background: #000; border-radius: var(--r); border: 1px solid var(--line); display: block; }
+  .recap h2 { font-size: 26px; letter-spacing: -.02em; }
+  .recap a.primary, .recap a.ghost { text-decoration: none; display: inline-block; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">🦃</span>
+    <div>
+      <h1>Turkey Day Best Ball</h1>
+      <p>The draft, reviewed</p>
+    </div>
+  </div>
+</header>
+<main class="recap">
+  <video controls playsinline preload="metadata" poster="poster.jpg">
+    <source src="recap.mp4" type="video/mp4">
+    Your browser cannot play this video. <a href="recap.mp4">Download it instead.</a>
+  </video>
+  <div>
+    <span class="eyebrow">Thanksgiving 2026 · 35 picks · 5 drafters</span>
+    <h2>The draft, reviewed</h2>
+    <p class="muted">A completely impartial review. Every pick mentioned is real. Feelings were not consulted.</p>
+  </div>
+  <div class="btnrow">
+    <button class="primary" id="back">Back to the scores</button>
+    <a class="ghost" href="recap.mp4" download="turkey-day-draft-recap.mp4">Download the video</a>
+  </div>
+</main>
+<script>
+  document.getElementById('back').addEventListener('click', function () {
+    if (history.length > 1) { history.back(); return; }
+    window.close();
+    setTimeout(function () { location.href = '../'; }, 200);
+  });
+</script>
+</body>
+</html>
