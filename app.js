@@ -260,6 +260,24 @@ function pts(pid) {
 }
 const gameState = (pid) => live.games[byId.get(pid)?.gameId]?.state || 'pre';
 
+/* Share of regulation still to play in a player's game: 1 before kickoff, 0 once final. */
+function fracLeft(pid) {
+  const g = live.games[byId.get(pid)?.gameId];
+  if (!g || g.state === 'pre') return 1;
+  if (g.state === 'post' || g.period > 4) return 0;
+  return Math.min(1, Math.max(0, ((4 - g.period) * 900 + g.clock) / 3600));
+}
+/* Live projection: points scored so far plus the pregame projection for the time left. */
+const livePts = (pid) => pts(pid) + (byId.get(pid)?.proj || 0) * fracLeft(pid);
+const sumStarters = (ids, valueOf) => bestLineup(ids, valueOf).filter((r) => r.starter && r.pid).reduce((t, r) => t + valueOf(r.pid), 0);
+/* The small lines under a team total: live projection once games start, pregame number alongside. */
+function projTag(ids, pregame) {
+  const started = ids.some((pid) => gameState(pid) !== 'pre'), done = ids.length && ids.every((pid) => gameState(pid) === 'post');
+  if (!started) return `<small>proj ${fmt(pregame)}</small>`;
+  if (done) return `<small>pregame proj ${fmt(pregame)}</small>`;
+  return `<small class="pace">on pace for ${fmt(sumStarters(ids, livePts))}</small><small>pregame proj ${fmt(pregame)}</small>`;
+}
+
 async function refreshLive() {
   try {
     const board = await (await fetch(`${ESPN}/scoreboard?dates=${SLATE_DATE}`, { cache: 'no-store' })).json();
@@ -268,7 +286,7 @@ async function refreshLive() {
       if (!ids.has(ev.id)) continue;
       const comp = ev.competitions[0], side = {};
       comp.competitors.forEach((c) => { side[c.homeAway] = { abbr: c.team.abbreviation, score: c.score }; });
-      live.games[ev.id] = { state: comp.status.type.state, detail: comp.status.type.shortDetail, home: side.home, away: side.away };
+      live.games[ev.id] = { state: comp.status.type.state, detail: comp.status.type.shortDetail, period: comp.status.period || 0, clock: comp.status.clock || 0, home: side.home, away: side.away };
     }
     const need = pool.games.filter((g) => {
       const st = live.games[g.id]?.state;
@@ -514,8 +532,8 @@ function viewScores() {
     const proj = bestLineup(ids, (pid) => byId.get(pid)?.proj || 0).filter((r) => r.starter && r.pid).reduce((s, r) => s + (byId.get(r.pid)?.proj || 0), 0);
     const liveN = ids.filter((pid) => gameState(pid) === 'in').length;
     const preN = ids.filter((pid) => gameState(pid) === 'pre').length;
-    return { t, rows, total, proj, liveN, preN };
-  }).sort((a, b) => b.total - a.total || b.proj - a.proj);
+    return { t, ids, rows, total, proj, pace: sumStarters(ids, livePts), liveN, preN };
+  }).sort((a, b) => b.total - a.total || b.pace - a.pace);
   const anyPicks = S.picks.length > 0;
   const upd = live.updated ? `Updated ${live.updated.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' })}` : 'Waiting for ESPN…';
   return `
@@ -531,7 +549,7 @@ function viewScores() {
     ${teams.map((x, rank) => `
     <article class="card${rank === 0 && x.total > 0 ? ' lead' : ''}">
       <header><span class="rank">${rank + 1}</span><h3>${esc(teamName(x.t))}</h3>
-        <div class="tot"><strong>${fmt(x.total)}</strong><small>proj ${fmt(x.proj)}</small></div></header>
+        <div class="tot"><strong>${fmt(x.total)}</strong>${projTag(x.ids, x.proj)}</div></header>
       <p class="status">${x.liveN ? `<span class="livetag">${x.liveN} live</span> ` : ''}${x.preN ? `${x.preN} yet to play` : x.liveN ? '' : x.rows.length ? 'All players final' : ''}</p>
       <ul>
         ${x.rows.map((r) => {
