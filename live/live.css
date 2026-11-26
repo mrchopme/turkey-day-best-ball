@@ -20,3 +20,8 @@
 .who-list .ghost { padding: 14px; font-size: 16px; text-align: left; }
 .who-list .link { justify-self: center; margin-top: 6px; }
 @media (prefers-reduced-motion: reduce) { .clock.you { animation: none; } }
+/* phones: give the player name the room, let the action column shrink to its button */
+@media (max-width: 640px) {
+  .thead, .prow { grid-template-columns: 26px minmax(0, 1fr) 40px minmax(62px, auto); gap: 8px; }
+  .prow .who b { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; display: block; }
+}
