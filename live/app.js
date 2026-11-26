@@ -44,6 +44,63 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const norm = (s) => String(s).toLowerCase().replace(/\b(jr|sr|ii|iii|iv|v)\b\.?/g, '').replace(/[^a-z]/g, '');
 const fmt = (n) => (Math.round(n * 100) / 100).toFixed(1);
 
+/* Headshot in a team-colored circle; falls back to initials if ESPN has no photo. */
+function av(p, cls = '', w = 96) {
+  const color = pool.teams[p.team]?.color || '333333';
+  const initials = p.name.split(' ').map((x) => x[0]).slice(0, 2).join('');
+  const img = /^\d+$/.test(p.id)
+    ? `<img src="https://a.espncdn.com/combiner/i?img=/i/headshots/nfl/players/full/${p.id}.png&w=${w}&h=${Math.round(w * 0.73)}" alt="" loading="lazy" onerror="this.remove()">` : '';
+  return `<span class="av ${cls}" style="--tc:#${color}"><i>${esc(initials)}</i>${img}</span>`;
+}
+
+/* How far a pick landed from the player's ADP. */
+function valueTag(i, always) {
+  const p = byId.get(S.picks[i]);
+  if (!p) return '';
+  const d = i + 1 - p.adp;
+  if (d >= 3) return `<span class="val steal">+${d} steal</span>`;
+  if (d <= -3) return `<span class="val reach">−${-d} reach</span>`;
+  return always ? '<span class="val even">right at ADP</span>' : '';
+}
+
+let actx = null;
+function chime() {
+  if (ui.sound === false) return;
+  try {
+    actx = actx || new (window.AudioContext || window.webkitAudioContext)();
+    const t = actx.currentTime;
+    [[660, 0], [880, 0.12], [1320, 0.24]].forEach(([f, d]) => {
+      const o = actx.createOscillator(), g = actx.createGain();
+      o.type = 'triangle'; o.frequency.value = f;
+      g.gain.setValueAtTime(0.0001, t + d);
+      g.gain.exponentialRampToValueAtTime(0.16, t + d + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + d + 0.4);
+      o.connect(g); g.connect(actx.destination);
+      o.start(t + d); o.stop(t + d + 0.45);
+    });
+  } catch (e) { /* sound is optional */ }
+}
+
+/* Full-screen flash for each pick. Taps pass through it, so it never blocks the next drafter. */
+function announce(i) {
+  const p = byId.get(S.picks[i]);
+  if (!p) return;
+  let el = $('#announce');
+  if (!el) { el = document.createElement('div'); el.id = 'announce'; document.body.appendChild(el); }
+  el.style.setProperty('--tc', '#' + (pool.teams[p.team]?.color || '333333'));
+  el.innerHTML = `<div class="acard"><span class="eyebrow">Round ${Math.floor(i / nTeams()) + 1} · Pick ${(i % nTeams()) + 1}</span>
+    ${av(p, 'xl', 264)}
+    <p class="ateam">${esc(teamName(teamForPick(i)))} selects</p>
+    <h2>${esc(p.name)}</h2>
+    <p class="ameta"><span class="chip ${p.pos}">${p.pos}${p.posRank}</span> ${p.team} · ADP ${p.adp} ${valueTag(i, true)}</p></div>`;
+  el.classList.remove('show');
+  void el.offsetWidth;
+  el.classList.add('show');
+  clearTimeout(announce.t);
+  announce.t = setTimeout(() => el.classList.remove('show'), 2400);
+  if (!guest) chime();
+}
+
 /* ---------- state ---------- */
 
 function newRoom() {
@@ -363,7 +420,7 @@ function applySnapshot(d) {
   let s;
   try { s = unpackDraft(d); } catch (e) { return; }
   net.seq = d.q;
-  const first = !S, wasMine = myTurn(), prevStatus = S?.status, prevTeams = S?.teams;
+  const first = !S, wasMine = myTurn(), prevStatus = S?.status, prevTeams = S?.teams, prevLen = S ? S.picks.length : null;
   S = s;
   localStorage.setItem(`tdbb.live.guest.${room}`, JSON.stringify(d));
   if (me !== null && me >= 0 && (me >= S.teams.length || (prevTeams && prevTeams[me] !== S.teams[me]))) me = null;
@@ -375,6 +432,7 @@ function applySnapshot(d) {
   if (first || prevStatus !== S.status) tab = S.status === 'drafting' ? 'draft' : 'scores';
   if (!wasMine && myTurn()) { tab = 'draft'; toast("You're on the clock"); if (navigator.vibrate) navigator.vibrate(250); }
   rerenderKeepingPlace();
+  if (prevLen !== null && S.picks.length > prevLen) announce(S.picks.length - 1);
 }
 
 async function sendPick(pid) {
@@ -578,8 +636,8 @@ function renderPoolRows() {
       : `<button class="draftbtn sm" data-pick="${p.id}">Draft</button>`;
     return `<div class="prow${gone ? ' taken' : ''}${ui.pending === p.id ? ' pending' : ''}">
       <span class="adp">${p.adp}</span>
-      <span class="who"><b>${esc(p.name)}</b>${p.inj ? `<span class="inj" title="${esc(p.inj)}">${esc(p.inj[0])}</span>` : ''}
-        <small><span class="chip ${p.pos}">${p.pos}${p.posRank}</span> ${p.team} ${p.home ? 'vs' : '@'} ${p.opp}${st === 'in' ? ' <span class="livetag">LIVE</span>' : st === 'post' ? ' <span class="fintag">FINAL</span>' : ''}</small></span>
+      <span class="who avrow">${av(p)}<span class="wt"><b>${esc(p.name)}</b>${p.inj ? `<span class="inj" title="${esc(p.inj)}">${esc(p.inj[0])}</span>` : ''}
+        <small><span class="chip ${p.pos}">${p.pos}${p.posRank}</span> ${p.team} ${p.home ? 'vs' : '@'} ${p.opp}${st === 'in' ? ' <span class="livetag">LIVE</span>' : st === 'post' ? ' <span class="fintag">FINAL</span>' : ''}</small></span></span>
       <span class="r proj">${fmt(p.proj)}</span>
       <span class="act">${action}</span>
     </div>`;
@@ -595,7 +653,7 @@ function boardHtml() {
       const i = r * n + (r % 2 === 0 ? c : n - 1 - c);
       const p = byId.get(S.picks[i]);
       const arrow = r % 2 === 0 ? '→' : '←';
-      if (p) h += `<div class="cell ${p.pos}"><span class="pn">${pickLabel(i)} ${arrow}</span><b>${esc(p.name)}</b><small>${p.pos} · ${p.team}</small></div>`;
+      if (p) h += `<div class="cell ${p.pos}"><span class="pn">${pickLabel(i)} ${arrow}</span>${av(p, 'xs')}<b>${esc(p.name)}</b><small>${p.pos} · ${p.team}</small>${valueTag(i)}</div>`;
       else h += `<div class="cell empty${i === cur && S.status === 'drafting' ? ' cur' : ''}"><span class="pn">${pickLabel(i)} ${arrow}</span>${i === cur && S.status === 'drafting' ? '<b>On the clock</b>' : ''}</div>`;
     }
   }
@@ -637,8 +695,8 @@ function viewScores() {
           const st = live.stats.get(p.id), gs = gameState(p.id), adj = Number(S.adj?.[p.id]) || 0;
           const line = st ? statLine(st, live.twoPt.get(p.id)) : '';
           return `<li class="${r.starter ? '' : 'bn'} ${gs}"><span class="slot">${r.slot}</span>
-            <span class="who"><span class="l1"><b>${esc(p.name)}</b> <span class="chip ${p.pos}">${p.pos}</span> <small>${p.team}</small></span>
-              <small class="line">${gs === 'pre' ? `${p.home ? 'vs' : '@'} ${p.opp} · proj ${fmt(p.proj)}` : esc(line || 'No stats yet')}${adj ? ` · adj ${adj > 0 ? '+' : ''}${adj}` : ''}</small></span>
+            <span class="who avrow">${av(p, 'sm')}<span class="wt"><span class="l1"><b>${esc(p.name)}</b> <span class="chip ${p.pos}">${p.pos}</span> <small>${p.team}</small></span>
+              <small class="line">${gs === 'pre' ? `${p.home ? 'vs' : '@'} ${p.opp} · proj ${fmt(p.proj)}` : esc(line || 'No stats yet')}${adj ? ` · adj ${adj > 0 ? '+' : ''}${adj}` : ''}</small></span></span>
             <span class="pp">${gs === 'in' ? '<span class="dot"></span>' : ''}${fmt(pts(p.id))}</span></li>`;
         }).join('')}
       </ul>
@@ -671,7 +729,8 @@ function viewCommish() {
       </div>
       <p class="muted">The share link is a snapshot of the rosters. Copy it again after any change and re-send it. Everyone's scores update live on their own.</p>
       <h3>Phone drafting</h3>
-      <div class="btnrow"><button class="primary" data-act="join">Copy join link</button></div>
+      <div class="btnrow"><button class="primary" data-act="join">Copy join link</button>
+        <label class="check"><input type="checkbox" id="soundOn" ${ui.sound === false ? '' : 'checked'}> Play a sound on this screen for each pick</label></div>
       <p class="muted">Everyone who opens the join link sees the draft live and picks on their own turn. Keep this tab open on this device: it is the hub, and every pick passes through it. Team names and picks travel through ntfy.sh, a public relay, and the link is the only key.</p>
       <h3>Save to a file</h3>
       <div class="btnrow">
@@ -708,6 +767,7 @@ function makePick(pid) {
   if (viewOnly || S.status !== 'drafting' || S.picks.includes(pid) || !byId.has(pid)) return;
   S.picks.push(pid);
   ui.pending = null;
+  announce(S.picks.length - 1);
   if (S.picks.length >= totalPicks()) { S.status = 'done'; tab = 'scores'; toast('Draft complete. Copy the share link for everyone.'); }
   save(); render();
 }
@@ -785,6 +845,7 @@ document.addEventListener('click', async (e) => {
 document.addEventListener('input', (e) => {
   const el = e.target;
   if (el.id === 'q') { ui.q = el.value; renderPoolRows(); }
+  else if (el.id === 'soundOn') { ui.sound = el.checked; }
   else if (el.id === 'hideDrafted') { ui.hideDrafted = el.checked; renderPoolRows(); }
   else if (el.dataset.f === 'name') { S.name = el.value; save(); $('#leagueName').textContent = S.name || 'Turkey Day Best Ball'; }
   else if (el.dataset.team !== undefined && isAdmin()) { S.teams[+el.dataset.team] = el.value; save(); }
