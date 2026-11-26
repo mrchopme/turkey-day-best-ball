@@ -31,7 +31,7 @@ let S = null;               // draft state
 let viewOnly = false;       // opened from a share link or a locked draft
 let locked = false;         // data/draft.json in the repo holds the final draft
 let tab = 'setup';
-const ui = { filter: 'ALL', q: '', hideDrafted: true, pending: null, unlocked: false };
+const ui = { filter: 'ALL', q: '', hideDrafted: true, pending: null, unlocked: false, ouDraft: {}, ouAs: 0, ouSent: null };
 const live = { games: {}, stats: new Map(), twoPt: new Map(), updated: null, error: null, finalLoaded: new Set() };
 let pollTimer = null;
 let guest = false;          // joined from a phone through the join link
@@ -126,14 +126,14 @@ function save() {
 
 /* Compact draft record, used by both the share link and the draft file. */
 function packDraft() {
-  return { n: S.name, t: S.teams, r: S.rounds, s: S.slots, p: S.picks, a: S.adj };
+  return { n: S.name, t: S.teams, r: S.rounds, s: S.slots, p: S.picks, a: S.adj, ...(S.ou ? { o: S.ou } : {}) };
 }
 function unpackDraft(d) {
   if (!d || !Array.isArray(d.t) || !d.t.length || !Number.isInteger(d.r) || !d.s || !Array.isArray(d.p)) throw new Error('not a draft record');
   const total = d.t.length * d.r;
   return {
     v: 1, name: String(d.n || 'Turkey Day Best Ball'), teams: d.t.map(String), rounds: d.r, slots: d.s, pin: null,
-    picks: d.p.map(String).slice(0, total), adj: d.a || {}, status: d.st || (d.p.length >= total ? 'done' : d.p.length || d.started ? 'drafting' : 'setup'),
+    picks: d.p.map(String).slice(0, total), adj: d.a || {}, ou: d.o && Array.isArray(d.o.l) && Array.isArray(d.o.p) ? d.o : null, status: d.st || (d.p.length >= total ? 'done' : d.p.length || d.started ? 'drafting' : 'setup'),
   };
 }
 
@@ -308,7 +308,7 @@ async function refreshLive() {
       if (!ids.has(ev.id)) continue;
       const comp = ev.competitions[0], side = {};
       comp.competitors.forEach((c) => { side[c.homeAway] = { abbr: c.team.abbreviation, score: c.score }; });
-      live.games[ev.id] = { state: comp.status.type.state, detail: comp.status.type.shortDetail, home: side.home, away: side.away };
+      live.games[ev.id] = { state: comp.status.type.state, detail: comp.status.type.shortDetail, home: side.home, away: side.away, ou: comp.odds?.[0]?.overUnder ?? live.games[ev.id]?.ou ?? null };
     }
     const need = pool.games.filter((g) => {
       const st = live.games[g.id]?.state;
@@ -330,7 +330,7 @@ async function refreshLive() {
     console.warn(e);
   }
   renderGames();
-  if (tab === 'scores') renderView();
+  if (tab === 'scores' || tab === 'ou') renderView();
   schedulePoll();
 }
 
@@ -396,6 +396,14 @@ function connectHost() {
 }
 
 function onRequest(m) {
+  if (m && m.k === 'ou') {
+    if (net.seen.has(m.n)) return;
+    net.seen.add(m.n);
+    applyOu(m.t, m.v);
+    save();   // always republish, so the phone gets its confirmation
+    if (tab === 'ou') renderView();
+    return;
+  }
   if (!m || net.seen.has(m.n) || S.status !== 'drafting') return;
   net.seen.add(m.n);
   const i = S.picks.length;
@@ -420,7 +428,7 @@ function applySnapshot(d) {
   let s;
   try { s = unpackDraft(d); } catch (e) { return; }
   net.seq = d.q;
-  const first = !S, wasMine = myTurn(), prevStatus = S?.status, prevTeams = S?.teams, prevLen = S ? S.picks.length : null;
+  const first = !S, wasMine = myTurn(), prevStatus = S?.status, prevTeams = S?.teams, prevLen = S ? S.picks.length : null, hadOu = !!(S && S.ou);
   S = s;
   localStorage.setItem(`tdbb.live.guest.${room}`, JSON.stringify(d));
   if (me !== null && me >= 0 && (me >= S.teams.length || (prevTeams && prevTeams[me] !== S.teams[me]))) me = null;
@@ -430,6 +438,14 @@ function applySnapshot(d) {
     toast(ok ? 'Pick is in' : 'That pick did not go through');
   }
   if (first || prevStatus !== S.status) tab = S.status === 'drafting' ? 'draft' : 'scores';
+  if (S.ou && !hadOu && !first) { tab = 'ou'; toast('The over/under game is open'); }
+  if (ui.ouSent && S.ou && me !== null && me >= 0) {
+    const mine = S.ou.p[me] || '';
+    if (Object.entries(ui.ouDraft).every(([i, v]) => mine[i] === v || ouState(S.ou.l[i]).locked)) {
+      clearTimeout(ui.ouSent); ui.ouSent = null; ui.ouDraft = {};
+      toast('Picks saved');
+    }
+  }
   if (!wasMine && myTurn()) { tab = 'draft'; toast("You're on the clock"); if (navigator.vibrate) navigator.vibrate(250); }
   rerenderKeepingPlace();
   if (prevLen !== null && S.picks.length > prevLen) announce(S.picks.length - 1);
@@ -484,6 +500,165 @@ function viewWho() {
     <button class="link" data-iam="-1">Just watching</button></div></div>`;
 }
 
+/* ---------- over/under game ----------
+   S.ou = { l: [[kind, ref, line], ...], lock: ms, p: ['ou-…' one string per team] }
+   kind g = a game's total points, p = a player's fantasy points, t = a drafter's team total.
+   Each pick string is index-aligned with the lines: o, u or - (no pick). */
+
+const gameOf = (ln) => (ln[0] === 'g' ? ln[1] : ln[0] === 'p' ? byId.get(ln[1])?.gameId : null);
+const kickoff = (gid) => +new Date(pool.games.find((g) => g.id === gid)?.date || 0);
+const lockTime = (ln) => (gameOf(ln) ? kickoff(gameOf(ln)) : S.ou.lock);
+const ouWho = () => (guest ? me : ui.ouAs);
+
+function ouState(ln) {
+  const gid = gameOf(ln);
+  if (gid) {
+    const st = live.games[gid]?.state || 'pre';
+    return { locked: st !== 'pre' || Date.now() >= kickoff(gid), final: st === 'post', started: st !== 'pre' };
+  }
+  return { locked: Date.now() >= S.ou.lock, final: pool.games.every((g) => live.games[g.id]?.state === 'post'), started: true };
+}
+
+function teamTotal(t, valueOf = pts) {
+  return bestLineup(rosterOf(t), valueOf).filter((r) => r.starter && r.pid).reduce((sum, r) => sum + valueOf(r.pid), 0);
+}
+
+function ouActual(ln) {
+  if (ln[0] === 'g') { const g = live.games[ln[1]]; return g ? (+g.home.score || 0) + (+g.away.score || 0) : 0; }
+  return Math.round((ln[0] === 'p' ? pts(ln[1]) : teamTotal(ln[1])) * 100) / 100;
+}
+
+/* 'o' or 'u' once decided (or as soon as the over is passed), 'x' for a push, null while open */
+function ouOutcome(ln) {
+  const st = ouState(ln), a = ouActual(ln);
+  if (st.final) return a > ln[2] ? 'o' : a < ln[2] ? 'u' : 'x';
+  return st.started && a > ln[2] ? 'o' : null;
+}
+
+function ouLabel(ln) {
+  if (ln[0] === 'g') {
+    const g = pool.games.find((x) => x.id === ln[1]);
+    return { title: `${g.away} @ ${g.home} total points`, sub: 'Both teams combined · sportsbook line', icon: '<span class="ico">🏈</span>' };
+  }
+  if (ln[0] === 'p') {
+    const p = byId.get(ln[1]);
+    return { title: esc(p.name), sub: `Fantasy points · ${p.pos} ${p.team}`, icon: av(p, 'sm') };
+  }
+  return { title: `${esc(teamName(ln[1]))}'s team`, sub: 'Final best-ball score', icon: `<span class="ico">${esc(teamName(ln[1])[0] || '?')}</span>` };
+}
+
+/* Lines only for games that have not kicked off: the real game total from the
+   sportsbook line in ESPN's feed, the two QBs and top two other players per
+   game from projections, and every drafter's expected final team total. */
+function buildOu() {
+  const now = Date.now();
+  const open = pool.games.filter((g) => (live.games[g.id]?.state || 'pre') === 'pre' && +new Date(g.date) > now);
+  if (!open.length) return false;
+  const half = (x) => Math.floor(x) + 0.5;
+  const lines = [];
+  for (const g of open) {
+    const total = live.games[g.id]?.ou;
+    if (total) lines.push(['g', g.id, total]);
+    const ps = pool.players.filter((p) => p.gameId === g.id).sort((a, b) => b.proj - a.proj);
+    [...ps.filter((p) => p.pos === 'QB').slice(0, 2), ...ps.filter((p) => p.pos !== 'QB').slice(0, 2)]
+      .forEach((p) => lines.push(['p', p.id, half(p.proj)]));
+  }
+  const expected = (pid) => {
+    const st = gameState(pid), proj = byId.get(pid)?.proj || 0;
+    return st === 'post' ? pts(pid) : st === 'in' ? Math.max(pts(pid), proj) : proj;
+  };
+  S.teams.forEach((_, t) => lines.push(['t', t, half(teamTotal(t, expected))]));
+  S.ou = { l: lines, lock: Math.min(...open.map((g) => +new Date(g.date))), p: S.teams.map(() => '-'.repeat(lines.length)) };
+  ui.ouDraft = {};
+  return true;
+}
+
+function applyOu(t, str) {
+  if (!S.ou || !Number.isInteger(t) || t < 0 || t >= nTeams() || typeof str !== 'string') return;
+  const cur = (S.ou.p[t] || '').padEnd(S.ou.l.length, '-').split('');
+  S.ou.l.forEach((ln, i) => {
+    if ((str[i] === 'o' || str[i] === 'u') && !ouState(ln).locked) cur[i] = str[i];
+  });
+  S.ou.p[t] = cur.join('');
+}
+
+function ouTap(i, v) {
+  const t = ouWho();
+  if (!S.ou || t === null || t < 0 || !S.ou.l[i] || ouState(S.ou.l[i]).locked || ui.ouSent) return;
+  if (v === S.ou.p[t]?.[i]) delete ui.ouDraft[i]; else ui.ouDraft[i] = v;
+  renderView();
+}
+
+async function ouSubmit() {
+  const t = ouWho();
+  if (!S.ou || t === null || t < 0 || !Object.keys(ui.ouDraft).length || ui.ouSent) return;
+  const str = S.ou.l.map((_, i) => ui.ouDraft[i] || '-').join('');
+  if (!guest) {
+    applyOu(t, str); ui.ouDraft = {};
+    save(); renderView(); toast('Picks saved');
+    return;
+  }
+  ui.ouSent = setTimeout(() => { ui.ouSent = null; renderView(); toast('Picks did not reach the host. Tap Save again.'); fetchLatest(); }, 9000);
+  renderView();
+  try {
+    const r = await fetch(`${NTFY}/${room}-r`, { method: 'POST', body: JSON.stringify({ n: Math.random().toString(36).slice(2), k: 'ou', t, v: str }) });
+    if (!r.ok) throw new Error('relay ' + r.status);
+  } catch (e) {
+    clearTimeout(ui.ouSent); ui.ouSent = null; renderView();
+    toast('Could not send your picks. Check your connection and try again.');
+  }
+}
+
+function viewOu() {
+  if (!S.ou) return '<p class="muted pad">The over/under game has not been started.</p>';
+  const t = ouWho(), can = t !== null && t >= 0, total = S.ou.l.length;
+  const board = S.teams.map((_, k) => {
+    let right = 0, wrong = 0, made = 0;
+    S.ou.l.forEach((ln, i) => {
+      const v = S.ou.p[k]?.[i];
+      if (v !== 'o' && v !== 'u') return;
+      made++;
+      const out = ouOutcome(ln);
+      if (out === v) right++; else if (out && out !== 'x' && ouState(ln).final) wrong++;
+    });
+    return { k, right, wrong, made };
+  }).sort((a, b) => b.right - a.right || a.wrong - b.wrong || b.made - a.made);
+  const openN = S.ou.l.filter((ln) => !ouState(ln).locked).length;
+  const dirty = Object.keys(ui.ouDraft).length;
+  const clock = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
+  const row = (ln, i) => {
+    const st = ouState(ln), out = ouOutcome(ln), a = ouActual(ln), L = ouLabel(ln);
+    const saved = can ? S.ou.p[t]?.[i] : null;
+    const mine = can ? (ui.ouDraft[i] || (saved === 'o' || saved === 'u' ? saved : null)) : null;
+    const shown = ln[0] === 'g' ? a : fmt(a);
+    const status = !st.locked ? `Locks ${clock(lockTime(ln))}` : st.final ? `Final ${shown}` : st.started ? `Now ${shown}` : 'Locked';
+    const btn = (v, text) => `<button data-ou="${i}:${v}" class="oub${mine === v ? ' on' : ''}${ui.ouDraft[i] === v ? ' unsaved' : ''}${st.locked && out === v ? ' hit' : ''}" ${st.locked || !can ? 'disabled' : ''}>${text}</button>`;
+    const names = (v) => S.teams.map((_, k) => k).filter((k) => S.ou.p[k]?.[i] === v).map((k) => esc(teamName(k))).join(', ') || 'nobody';
+    const result = mine && out && out !== 'x' ? (out === mine ? ' won' : st.final ? ' lost' : '') : '';
+    return `<div class="ourow${st.locked ? ' locked' : ''}${result}">
+      <div class="oul">${L.icon}<div class="wt"><b>${L.title}</b><small>${L.sub}</small></div></div>
+      <div class="ouline"><strong>${ln[2]}</strong><small>${status}</small></div>
+      <div class="oubtns">${btn('o', 'Over')}${btn('u', 'Under')}</div>
+      ${st.locked ? `<div class="ouwho"><span><b>Over:</b> ${names('o')}</span><span><b>Under:</b> ${names('u')}</span></div>` : ''}
+    </div>`;
+  };
+  const section = (title, idxs) => (idxs.length ? `<section class="ousec"><h3>${title}</h3><div class="ourows">${idxs.map((i) => row(S.ou.l[i], i)).join('')}</div></section>` : '');
+  const all = S.ou.l.map((_, i) => i);
+
+  return `
+  <div class="scorebar">
+    <span class="muted">${openN ? `${openN} of ${total} lines still open. Other people's picks stay hidden until a line locks.` : 'Every line is locked.'}</span>
+    <span class="grow"></span>
+    ${guest ? '' : `<label class="check">Picking as <select id="ouAs">${S.teams.map((_, k) => `<option value="${k}" ${k === ui.ouAs ? 'selected' : ''}>${esc(teamName(k))}</option>`).join('')}</select></label>`}
+  </div>
+  <div class="oulb">${board.map((b, r) => `<div class="oulbc${r === 0 && b.right ? ' lead' : ''}"><span class="rank">${r + 1}</span><b>${esc(teamName(b.k))}</b><strong>${b.right}</strong><small>${b.made}/${total} picked${b.wrong ? ` · ${b.wrong} missed` : ''}</small></div>`).join('')}</div>
+  ${pool.games.map((g) => section(`${g.away} @ ${g.home}`, all.filter((i) => gameOf(S.ou.l[i]) === g.id))).join('')}
+  ${section('Team totals', all.filter((i) => S.ou.l[i][0] === 't'))}
+  ${can ? '' : '<p class="muted pad">You are watching. Tap Me to pick a name and play.</p>'}
+  ${dirty && can ? `<div class="ousubmit"><button class="primary big" data-act="ousubmit" ${ui.ouSent ? 'disabled' : ''}>${ui.ouSent ? 'Sending…' : `Save ${dirty} pick${dirty > 1 ? 's' : ''}`}</button></div>` : ''}`;
+}
+
 /* ---------- rendering ---------- */
 
 function toast(msg) {
@@ -512,6 +687,7 @@ function renderChrome() {
   else {
     if ((!viewOnly || guest) && S.status === 'drafting') tabs.push(['draft', 'Draft']);
     tabs.push(['board', 'Board'], ['scores', 'Scores']);
+    if (S.ou) tabs.push(['ou', 'O/U']);
     if (!viewOnly) tabs.push(['commish', 'Commish']);
   }
   if (!tabs.some(([k]) => k === tab)) tab = tabs[0][0];
@@ -544,6 +720,7 @@ function renderView() {
   else if (tab === 'board') v.innerHTML = `<div class="panel">${boardHtml()}</div>`;
   else if (tab === 'scores') v.innerHTML = viewScores();
   else if (tab === 'commish') v.innerHTML = viewCommish();
+  else if (tab === 'ou') v.innerHTML = viewOu();
 }
 
 /* --- setup --- */
@@ -728,6 +905,11 @@ function viewCommish() {
         <button class="danger" data-act="reset">Reset draft</button>
       </div>
       <p class="muted">The share link is a snapshot of the rosters. Copy it again after any change and re-send it. Everyone's scores update live on their own.</p>
+      <h3>Over/under game</h3>
+      <div class="btnrow">${S.ou
+        ? '<button class="ghost" data-act="ouopen">Open the O/U tab</button><button class="danger" data-act="ouclear">Remove the game</button>'
+        : `<button class="primary" data-act="oustart" ${S.status === 'done' ? '' : 'disabled'}>Start the over/under game</button>`}</div>
+      <p class="muted">After the draft, everyone calls over or under on game totals, player fantasy points and each team's final score, for the games that have not kicked off yet. One point per correct call. Each line locks at kickoff.</p>
       <h3>Phone drafting</h3>
       <div class="btnrow"><button class="primary" data-act="join">Copy join link</button>
         <label class="check"><input type="checkbox" id="soundOn" ${ui.sound === false ? '' : 'checked'}> Play a sound on this screen for each pick</label></div>
@@ -798,6 +980,7 @@ document.addEventListener('click', async (e) => {
     [S.teams[i], S.teams[j]] = [S.teams[j], S.teams[i]];
     save(); renderView(); return;
   }
+  if (d.ou) { const [i, v] = d.ou.split(':'); ouTap(+i, v); return; }
   if (d.adjclear) { delete S.adj[d.adjclear]; save(); renderView(); return; }
   if (d.iam !== undefined) {
     me = +d.iam;
@@ -829,11 +1012,20 @@ document.addEventListener('click', async (e) => {
       save(); render(); toast('Last pick undone'); break;
     case 'reset':
       if (!isAdmin() || !window.confirm('Reset the draft? All picks are cleared and you go back to setup.')) break;
-      S.picks = []; S.adj = {}; S.status = 'setup'; tab = 'setup';
+      S.picks = []; S.adj = {}; S.ou = null; S.status = 'setup'; tab = 'setup';
       save(); render(); break;
     case 'lock': ui.unlocked = false; renderView(); break;
     case 'share': copyShare(); break;
     case 'join': copyJoin(); break;
+    case 'oustart':
+      if (!isAdmin()) break;
+      if (!buildOu()) { toast('Every game has already kicked off'); break; }
+      tab = 'ou'; save(); render(); toast('Over/under game is open on every phone'); break;
+    case 'ouclear':
+      if (!isAdmin() || !window.confirm('Remove the over/under game and everyone\'s picks?')) break;
+      S.ou = null; ui.ouDraft = {}; save(); render(); break;
+    case 'ouopen': tab = 'ou'; render(); break;
+    case 'ousubmit': ouSubmit(); break;
     case 'whoami': me = null; render(); break;
     case 'download': downloadDraft(); break;
     case 'restore': if (isAdmin()) $('#restoreFile').click(); break;
@@ -866,6 +1058,7 @@ document.addEventListener('submit', async (e) => {
 });
 
 document.addEventListener('change', (e) => {
+  if (e.target.id === 'ouAs') { ui.ouAs = +e.target.value; ui.ouDraft = {}; renderView(); return; }
   if (e.target.id !== 'restoreFile' || !e.target.files[0]) return;
   restoreDraft(e.target.files[0]);
   e.target.value = '';

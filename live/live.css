@@ -70,3 +70,46 @@
 .ameta { font-size: clamp(14px, 1.8vw, 18px); color: rgba(255, 255, 255, .78); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: center; margin-top: 6px; }
 .ameta .val { font-size: 12.5px; padding: 2px 8px; }
 @media (prefers-reduced-motion: reduce) { #announce, .acard { transition: none; } }
+
+/* over/under game */
+#ouAs { width: auto; padding: 6px 10px; margin-left: 6px; }
+.oulb { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 20px; }
+.oulbc { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); padding: 12px 14px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0 10px; align-items: center; }
+.oulbc .rank { grid-row: span 2; }
+.oulbc b { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oulbc strong { grid-row: span 2; font-size: 26px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+.oulbc small { grid-column: 2; color: var(--muted); font-size: 12px; }
+.oulbc.lead { border-color: rgba(255, 138, 61, .6); }
+.oulbc.lead .rank { background: var(--accent); color: var(--accent-ink); }
+.ousec { margin-bottom: 20px; }
+.ousec h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .07em; color: var(--muted); margin: 0 0 8px 4px; }
+.ourows { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); overflow: hidden; }
+.ourow { display: grid; grid-template-columns: minmax(0, 1fr) 104px auto; gap: 8px 14px; align-items: center; padding: 12px 16px; border-bottom: 1px solid rgba(38, 45, 57, .6); }
+.ourow:last-child { border-bottom: 0; }
+.ourow.won { background: rgba(61, 220, 151, .07); }
+.oul { display: flex; gap: 11px; align-items: center; min-width: 0; }
+.oul b { display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.oul small, .ouline small { display: block; color: var(--muted); font-size: 12px; }
+.ouline { text-align: center; }
+.ouline strong { font-size: 22px; font-variant-numeric: tabular-nums; letter-spacing: -.01em; }
+.oubtns { display: flex; gap: 6px; }
+.oub { border: 1px solid var(--line); background: var(--panel2); border-radius: 9px; padding: 9px 14px; font-weight: 650; min-width: 74px; }
+.oub:hover:not(:disabled) { border-color: #3a4353; }
+.oub.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.oub.unsaved { box-shadow: 0 0 0 2px var(--bg), 0 0 0 4px rgba(255, 138, 61, .55); }
+.oub:disabled { opacity: .4; }
+.oub.on:disabled, .oub.hit:disabled { opacity: 1; }
+.oub.hit { border-color: var(--good); color: var(--good); }
+.oub.on.hit { background: var(--good); border-color: var(--good); color: #062a1b; }
+.ourow.lost .oub.on { background: transparent; border-color: rgba(255, 90, 95, .6); color: #ff8589; text-decoration: line-through; }
+.ouwho { grid-column: 1 / -1; display: flex; gap: 6px 18px; flex-wrap: wrap; font-size: 12.5px; color: var(--muted); }
+.ouwho b { color: var(--text); font-weight: 600; }
+.ousubmit { position: sticky; bottom: 14px; margin-top: 16px; z-index: 10; }
+.ousubmit .big { margin: 0; box-shadow: 0 12px 34px rgba(0, 0, 0, .6); }
+.ico { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 50%; display: grid; place-items: center; background: var(--panel2); border: 1px solid var(--line); font-size: 15px; font-weight: 800; }
+@media (max-width: 640px) {
+  .ourow { grid-template-columns: minmax(0, 1fr) auto; }
+  .ouline { text-align: right; }
+  .oubtns { grid-column: 1 / -1; }
+  .oub { flex: 1; padding: 12px; }
+}
